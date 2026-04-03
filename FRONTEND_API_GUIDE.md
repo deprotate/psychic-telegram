@@ -1,83 +1,61 @@
-# Frontend Guide for AI Business Trainer API
+Для `\test` фронту теперь нужен совсем простой сценарий: никаких `client_id`, `session_id`, multiple sessions и user progress. Сервер держит одну глобальную активную сессию кейса в памяти, а фронт просто работает с текущим состоянием.
 
-## 1. Base URL and General Rules
+**Base URL**
+- Локально: `http://localhost:8000`
+- Swagger: `http://localhost:8000/docs`
+- OpenAPI: `http://localhost:8000/openapi.json`
 
-- Base URL for local dev: `http://localhost:8000`
-- Swagger / manual check: `http://localhost:8000/docs`
-- OpenAPI schema: `http://localhost:8000/openapi.json`
-- Auth in MVP does not exist.
-- Frontend must generate and keep a stable `client_id` on the client side.
-- Simplest approach: save `client_id` once in `localStorage`.
+**Как работает flow**
+1. Фронт загружает список кейсов через `GET /test/cases`
+2. Пользователь выбирает кейс
+3. Фронт вызывает `POST /test/case/start`
+4. Пользователь пишет решение
+5. Фронт вызывает `POST /test/case/submit`
+6. Если пользователь хочет доработать решение, фронт вызывает `POST /test/case/followup`
+7. После refresh фронт может восстановить экран через `GET /test/case/state`
 
-Example `client_id`:
+**Важно**
+- В `\test` нет user identity
+- В `\test` нет session id
+- В `\test` в каждый момент времени существует только один активный кейс
+- Новый `POST /test/case/start` полностью сбрасывает предыдущую test-сессию
 
-```ts
-const clientId =
-  localStorage.getItem("client_id") ??
-  crypto.randomUUID();
+**Endpoints**
 
-localStorage.setItem("client_id", clientId);
-```
+`GET /test/health`
+Проверка режима работы API.
 
-Important:
-
-- Every request that creates or continues user work must send the same `client_id`.
-- `session_id` is returned by backend after session creation and must be stored on the frontend.
-- If you send another `client_id` for an existing session, backend returns `403`.
-
-## 2. Main User Flows
-
-### Flow A. Startup Idea Mode
-
-1. User enters startup idea and optional context.
-2. Frontend calls `POST /api/v1/idea-sessions`.
-3. Backend returns:
-   - `session_id`
-   - first AI answer
-   - risks
-   - next questions
-   - advice
-   - used references
-4. Frontend stores `session_id` and renders chat thread.
-5. On each next user message, frontend calls `POST /api/v1/idea-sessions/{session_id}/messages`.
-6. When user decides task is finished, frontend optionally calls `POST /api/v1/progress/complete`.
-
-### Flow B. Business Case Mode
-
-1. Frontend loads cases through `GET /api/v1/cases`.
-2. User picks one case.
-3. Frontend can optionally load full case through `GET /api/v1/cases/{case_id}`.
-4. Frontend creates work session through `POST /api/v1/case-sessions`.
-5. User writes solution.
-6. Frontend sends solution to `POST /api/v1/case-sessions/{session_id}/submit`.
-7. Backend returns structured evaluation with `score`, strengths, weaknesses, improvements and criterion scores.
-8. For clarifying questions after evaluation, frontend calls `POST /api/v1/case-sessions/{session_id}/messages`.
-9. When user finishes, frontend optionally calls `POST /api/v1/progress/complete`.
-10. Frontend loads user stats with `GET /api/v1/stats/{client_id}`.
-
-## 3. Endpoints
-
-### `GET /health`
-
-Use for simple app availability check.
-
-Response example:
-
+Пример ответа:
 ```json
 {
   "status": "ok",
-  "llm_mode": "yandex",
-  "cases_count": 5,
-  "risk_patterns_count": 12
+  "mode": "mock",
+  "ready": true,
+  "error": null,
+  "cases_count": 5
 }
 ```
 
-### `GET /api/v1/cases`
+Поля:
+- `mode`: `"mock"` или `"yandex"`
+- `ready`: готов ли backend реально обслуживать запросы
+- `status`: `"ok"` или `"misconfigured"`
 
-Returns short cards for cases list page.
+Если `TEST_USE_MOCK=false`, но нет ключей Яндекса, будет что-то вроде:
+```json
+{
+  "status": "misconfigured",
+  "mode": "yandex",
+  "ready": false,
+  "error": "YANDEX_API_KEY and YANDEX_FOLDER_ID are required when TEST_USE_MOCK=false",
+  "cases_count": 5
+}
+```
 
-Response example:
+`GET /test/cases`
+Список кейсов для карточек/каталога.
 
+Пример:
 ```json
 [
   {
@@ -91,12 +69,10 @@ Response example:
 ]
 ```
 
-### `GET /api/v1/cases/{case_id}`
+`GET /test/cases/{case_id}`
+Полное описание кейса.
 
-Returns full case for case page or modal.
-
-Response example:
-
+Пример:
 ```json
 {
   "id": "fintech-onboarding",
@@ -117,79 +93,20 @@ Response example:
 }
 ```
 
-### `POST /api/v1/idea-sessions`
-
-Creates idea session and returns first AI response.
-
-Request:
-
-```json
-{
-  "client_id": "web-demo-user-1",
-  "idea_text": "Хочу сделать ИИ-тренажёр для студентов по кейсам и стартап-питчам",
-  "context": "Интеграция с бизнес-клубом Центрального Университета"
-}
-```
-
-Response:
-
-```json
-{
-  "session_id": "db9f9dcb-4de8-44ca-8b97-f7190dca2d01",
-  "reply": "Идея выглядит как хороший старт...",
-  "used_references": [
-    {
-      "id": "market-validation",
-      "title": "Недостаточная проверка спроса",
-      "source_type": "risk_pattern",
-      "reason": "Идея выглядит интересной, но не видно дешёвого..."
-    }
-  ],
-  "next_questions": [
-    "Какой эксперимент за 1-2 недели честно покажет наличие спроса?"
-  ],
-  "risks": [
-    "Недостаточная проверка спроса: ..."
-  ],
-  "advice": [
-    "Сформулируйте одну главную проблему пользователя..."
-  ]
-}
-```
-
-### `POST /api/v1/idea-sessions/{session_id}/messages`
-
-Continues idea discussion.
+`POST /test/case/start`
+Выбирает активный кейс и сбрасывает прошлую test-сессию.
 
 Request:
-
 ```json
 {
-  "client_id": "web-demo-user-1",
-  "message": "Хочу сузить сегмент до студентов, которые участвуют в кейс-чемпионатах"
-}
-```
-
-Response shape is the same as in idea session creation.
-
-### `POST /api/v1/case-sessions`
-
-Creates case-solving session.
-
-Request:
-
-```json
-{
-  "client_id": "web-demo-user-1",
   "case_id": "fintech-onboarding"
 }
 ```
 
 Response:
-
 ```json
 {
-  "session_id": "4e4668d8-532b-4504-ae48-6149175938db",
+  "mode": "mock",
   "case": {
     "id": "fintech-onboarding",
     "title": "Ускорение онбординга в студенческом финтехе",
@@ -207,186 +124,211 @@ Response:
       "differentiation"
     ]
   },
-  "welcome_message": "Сессия по кейсу создана. Отправьте своё решение..."
-}
-```
-
-### `POST /api/v1/case-sessions/{session_id}/submit`
-
-Submits user solution for evaluation.
-
-Request:
-
-```json
-{
-  "client_id": "web-demo-user-1",
-  "solution_text": "Сначала сегментируем новых пользователей, сокращаем путь до первой полезной операции..."
-}
-```
-
-Response:
-
-```json
-{
-  "session_id": "4e4668d8-532b-4504-ae48-6149175938db",
-  "summary": "Решение по кейсу выглядит жизнеспособным...",
-  "score": 81,
-  "criteria_scores": [
+  "welcome_message": "Кейс активирован. Пришли решение, и я оценю его...",
+  "messages": [
     {
-      "name": "problem_clarity",
-      "score": 82,
-      "rationale": "Есть структура"
-    }
-  ],
-  "strengths": ["Есть структура"],
-  "weaknesses": ["Не хватает цифр"],
-  "improvements": ["Добавить метрики"],
-  "novel_ideas": ["Нестандартный канал"],
-  "used_references": [
-    {
-      "id": "fintech-onboarding",
-      "title": "Ускорение онбординга в студенческом финтехе",
-      "source_type": "business_case",
-      "reason": "Оценка строится на условиях кейса и эталонном направлении решения."
+      "role": "assistant",
+      "content": "Кейс активирован. Пришли решение, и я оценю его..."
     }
   ]
 }
 ```
 
-### `POST /api/v1/case-sessions/{session_id}/messages`
-
-For follow-up questions after case evaluation.
+`POST /test/case/submit`
+Отправка решения по текущему активному кейсу.
 
 Request:
-
 ```json
 {
-  "client_id": "web-demo-user-1",
+  "solution_text": "Сначала сегментируем пользователей, сокращаем путь до первой ценности и считаем метрики."
+}
+```
+
+Response:
+```json
+{
+  "mode": "mock",
+  "case": {
+    "id": "fintech-onboarding",
+    "title": "Ускорение онбординга в студенческом финтехе",
+    "theme": "fintech",
+    "short_description": "Нужно увеличить конверсию студентов...",
+    "difficulty": "medium",
+    "tags": ["финтех", "студенты", "онбординг"],
+    "background": "Студенческий финтех-сервис...",
+    "task": "Предложите MVP-решение...",
+    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "evaluation_criteria": [
+      "problem_clarity",
+      "market_business_logic",
+      "feasibility",
+      "differentiation"
+    ]
+  },
+  "summary": "Решение по кейсу выглядит рабочим...",
+  "score": 78,
+  "criteria_scores": [
+    {
+      "name": "problem_clarity",
+      "score": 80,
+      "rationale": "Есть ли ясная постановка задачи."
+    }
+  ],
+  "strengths": ["Ответ структурирован..."],
+  "weaknesses": ["Недостаёт более чётких метрик..."],
+  "improvements": ["Добавьте 2-3 метрики..."],
+  "novel_ideas": ["В решении есть свои идеи..."],
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "Кейс активирован..."
+    },
+    {
+      "role": "user",
+      "content": "Сначала сегментируем пользователей..."
+    },
+    {
+      "role": "assistant",
+      "content": "Решение по кейсу выглядит рабочим..."
+    }
+  ]
+}
+```
+
+`POST /test/case/followup`
+Уточняющий вопрос после submit.
+
+Request:
+```json
+{
   "message": "Какой эксперимент лучше сделать первым?"
 }
 ```
 
-Response shape:
-
+Response:
 ```json
 {
-  "session_id": "4e4668d8-532b-4504-ae48-6149175938db",
-  "reply": "По кейсу я бы усилил ответ через одну конкретную проверку...",
-  "used_references": [
+  "mode": "mock",
+  "case": {
+    "id": "fintech-onboarding",
+    "title": "Ускорение онбординга в студенческом финтехе",
+    "theme": "fintech",
+    "short_description": "Нужно увеличить конверсию студентов...",
+    "difficulty": "medium",
+    "tags": ["финтех", "студенты", "онбординг"],
+    "background": "Студенческий финтех-сервис...",
+    "task": "Предложите MVP-решение...",
+    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "evaluation_criteria": [
+      "problem_clarity",
+      "market_business_logic",
+      "feasibility",
+      "differentiation"
+    ]
+  },
+  "reply": "Я бы сфокусировался на одном эксперименте...",
+  "risks": ["Ответ может остаться слишком общим..."],
+  "next_questions": ["Какая метрика честно покажет, что гипотеза не работает?"],
+  "advice": ["Опиши эксперимент в формате гипотеза -> действие -> метрика -> срок."],
+  "messages": [
     {
-      "id": "fintech-onboarding",
-      "title": "Ускорение онбординга в студенческом финтехе",
-      "source_type": "business_case",
-      "reason": "Оценка строится на условиях кейса и эталонном направлении решения."
+      "role": "assistant",
+      "content": "Кейс активирован..."
+    },
+    {
+      "role": "user",
+      "content": "Сначала сегментируем пользователей..."
+    },
+    {
+      "role": "assistant",
+      "content": "Решение по кейсу выглядит рабочим..."
+    },
+    {
+      "role": "user",
+      "content": "Какой эксперимент лучше сделать первым?"
+    },
+    {
+      "role": "assistant",
+      "content": "Я бы сфокусировался на одном эксперименте..."
+    }
+  ]
+}
+```
+
+`GET /test/case/state`
+Получение текущего состояния test-сессии. Это главный endpoint для восстановления UI после refresh.
+
+Если кейс ещё не стартовал:
+```json
+{
+  "mode": "mock",
+  "active_case": null,
+  "messages": [],
+  "last_evaluation": null
+}
+```
+
+Если кейс уже активен:
+```json
+{
+  "mode": "mock",
+  "active_case": {
+    "id": "fintech-onboarding",
+    "title": "Ускорение онбординга в студенческом финтехе",
+    "theme": "fintech",
+    "short_description": "Нужно увеличить конверсию студентов...",
+    "difficulty": "medium",
+    "tags": ["финтех", "студенты", "онбординг"],
+    "background": "Студенческий финтех-сервис...",
+    "task": "Предложите MVP-решение...",
+    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "evaluation_criteria": [
+      "problem_clarity",
+      "market_business_logic",
+      "feasibility",
+      "differentiation"
+    ]
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "Кейс активирован..."
     }
   ],
-  "next_questions": ["Какая метрика провалит гипотезу быстрее всего?"],
-  "risks": ["Слишком общий ответ без чёткой последовательности шагов."],
-  "advice": ["Опирайтесь на ограничения кейса и явно ссылайтесь на них."]
+  "last_evaluation": null
 }
 ```
 
-### `POST /api/v1/progress/complete`
+**Ошибки**
+- `404` если кейс не найден
+- `400` если вызвать `submit` без `start`
+- `400` если вызвать `followup` до `submit`
+- `503` если выбран Yandex-режим, но backend misconfigured
+- `502` если Yandex API реально упал во время запроса
 
-Marks task as completed by user.
+**Что хранить на фронте**
+Минимум:
+- `cases`
+- `activeCase`
+- `messages`
+- `lastEvaluation`
+- `mode`
+- `loading`
+- `error`
 
-Request:
-
-```json
-{
-  "client_id": "web-demo-user-1",
-  "task_type": "case_submission",
-  "task_id": "4e4668d8-532b-4504-ae48-6149175938db",
-  "self_marked_complete": true
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "completion": {
-    "client_id": "web-demo-user-1",
-    "task_type": "case_submission",
-    "task_id": "4e4668d8-532b-4504-ae48-6149175938db",
-    "self_marked_complete": true,
-    "completed_at": "2026-04-03T13:10:00+00:00"
-  },
-  "stats": {
-    "client_id": "web-demo-user-1",
-    "completed_count": 1,
-    "sessions_count": 2,
-    "average_score": 81.0,
-    "last_activity": "2026-04-03T13:10:00+00:00"
-  }
-}
-```
-
-### `GET /api/v1/stats/{client_id}`
-
-Returns basic user stats.
-
-Response:
-
-```json
-{
-  "client_id": "web-demo-user-1",
-  "completed_count": 1,
-  "sessions_count": 2,
-  "average_score": 81.0,
-  "last_activity": "2026-04-03T13:10:00+00:00"
-}
-```
-
-## 4. Frontend State You Should Store
-
-Minimum state:
-
-- `client_id`
-- current mode: `idea` or `case`
-- `selected_case_id`
-- `active_session_id`
-- messages array for UI
-- latest case evaluation
-- stats for profile/dashboard
-
-Recommended chat message shape on frontend:
-
+Пример state:
 ```ts
-type ChatMessage = {
+type TestMessage = {
   role: "user" | "assistant";
   content: string;
-  createdAt?: string;
 };
-```
 
-Recommended local state per idea session:
-
-```ts
-type IdeaSessionState = {
-  sessionId: string;
-  reply: string;
-  risks: string[];
-  nextQuestions: string[];
-  advice: string[];
-  usedReferences: Array<{
-    id: string;
-    title: string;
-    source_type: string;
-    reason: string;
-  }>;
-};
-```
-
-Recommended local state per case evaluation:
-
-```ts
-type CaseEvaluation = {
-  sessionId: string;
+type TestEvaluation = {
+  mode: "mock" | "yandex";
+  case: CaseDetail;
   summary: string;
   score: number;
-  criteriaScores: Array<{
+  criteria_scores: Array<{
     name: string;
     score: number;
     rationale?: string | null;
@@ -394,28 +336,34 @@ type CaseEvaluation = {
   strengths: string[];
   weaknesses: string[];
   improvements: string[];
-  novelIdeas: string[];
+  novel_ideas: string[];
+  messages: TestMessage[];
+};
+
+type TestState = {
+  mode: "mock" | "yandex" | null;
+  activeCase: CaseDetail | null;
+  messages: TestMessage[];
+  lastEvaluation: TestEvaluation | null;
 };
 ```
 
-## 5. Error Handling
+**Рекомендуемый frontend flow**
+- На загрузке страницы:
+  - `GET /test/health`
+  - `GET /test/case/state`
+  - если кейс не активен, показать список из `GET /test/cases`
+- При выборе кейса:
+  - `POST /test/case/start`
+  - взять `case`, `welcome_message`, `messages`
+- При отправке решения:
+  - `POST /test/case/submit`
+  - обновить `messages` и `lastEvaluation`
+- При follow-up:
+  - `POST /test/case/followup`
+  - обновить `messages`
 
-Backend can return:
-
-- `404` if `case_id` or `session_id` does not exist
-- `403` if `client_id` does not match session owner
-- `422` if required fields are empty
-- `500` if server-side unexpected error happens
-
-Recommended frontend behavior:
-
-- For `404`: show “сессия не найдена” or recreate session.
-- For `403`: clear broken local session and ask user to restart flow.
-- For `422`: validate inputs before request and show inline error.
-- For `500`: show retry action and keep user text in UI.
-
-## 6. Ready-to-Use Fetch Helpers
-
+**Готовый fetch helper**
 ```ts
 const API_BASE = "http://localhost:8000";
 
@@ -437,65 +385,45 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 ```
 
-Create idea session:
-
+**Примеры вызовов**
+Загрузка кейсов:
 ```ts
-const ideaSession = await api("/api/v1/idea-sessions", {
+const cases = await api("/test/cases");
+```
+
+Старт кейса:
+```ts
+const started = await api("/test/case/start", {
   method: "POST",
   body: JSON.stringify({
-    client_id: clientId,
-    idea_text: ideaText,
-    context
+    case_id: "fintech-onboarding"
   })
 });
 ```
 
-Continue idea chat:
-
+Отправка решения:
 ```ts
-const ideaReply = await api(`/api/v1/idea-sessions/${sessionId}/messages`, {
+const evaluation = await api("/test/case/submit", {
   method: "POST",
   body: JSON.stringify({
-    client_id: clientId,
-    message
+    solution_text: userSolution
   })
 });
 ```
 
-Create case session:
-
+Follow-up:
 ```ts
-const caseSession = await api("/api/v1/case-sessions", {
+const followup = await api("/test/case/followup", {
   method: "POST",
   body: JSON.stringify({
-    client_id: clientId,
-    case_id: caseId
+    message: userQuestion
   })
 });
 ```
 
-Submit case solution:
-
+Восстановление state:
 ```ts
-const evaluation = await api(`/api/v1/case-sessions/${sessionId}/submit`, {
-  method: "POST",
-  body: JSON.stringify({
-    client_id: clientId,
-    solution_text: solutionText
-  })
-});
+const state = await api("/test/case/state");
 ```
 
-Load stats:
-
-```ts
-const stats = await api(`/api/v1/stats/${clientId}`);
-```
-
-## 7. Integration Notes for MVP
-
-- Backend already supports CORS for MVP.
-- If frontend runs on another port, backend should still accept it by default.
-- For production later, `APP_CORS_ORIGINS` should be narrowed down to explicit domains.
-- The API is stateful through `session_id`, but user identity is still fully client-driven through `client_id`.
-- Do not generate a new `client_id` on every refresh, иначе пользователь потеряет связность своих сессий и статистики.
+Если хочешь, следующим сообщением могу сразу написать готовый `testApi.ts` и пример React-хука `useTestCaseFlow()` под этот `/test` контракт.
