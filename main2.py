@@ -362,7 +362,7 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
     app.state.repository = repository or JsonRepository(DATA_DIR)
     app.state.test_state = create_test_state()
 
-    use_mock = parse_bool_env("TEST_USE_MOCK", default=True)
+    use_mock = parse_bool_env("TEST_USE_MOCK", default=False)
     app.state.mode = "mock" if use_mock else "yandex"
     app.state.service_error = None
 
