@@ -32,9 +32,25 @@ def test_health_and_openapi(client: TestClient) -> None:
     openapi = client.get("/openapi.json")
     assert openapi.status_code == 200
     paths = openapi.json()["paths"]
+    assert "/test/mode" in paths
     assert "/test/case/start" in paths
     assert "/test/cases/progress" in paths
     assert all(path.startswith("/test") for path in paths)
+
+
+def test_switch_mode_endpoint(client: TestClient) -> None:
+    to_yandex = client.post("/test/mode", json={"mode": "yandex"})
+    assert to_yandex.status_code == 200
+    assert to_yandex.json()["mode"] == "yandex"
+
+    health = client.get("/test/health")
+    assert health.status_code == 200
+    assert health.json()["mode"] == "yandex"
+
+    to_mock = client.post("/test/mode", json={"mode": "mock"})
+    assert to_mock.status_code == 200
+    assert to_mock.json()["mode"] == "mock"
+    assert to_mock.json()["ready"] is True
 
 
 def test_cases_list_and_detail(client: TestClient) -> None:

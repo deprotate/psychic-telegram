@@ -42,6 +42,17 @@ class TestHealthResponse(BaseSchema):
     cases_count: int
 
 
+class TestModeSwitchRequest(BaseSchema):
+    mode: str = Field(pattern="^(mock|yandex)$")
+
+
+class TestModeSwitchResponse(BaseSchema):
+    status: str
+    mode: str
+    ready: bool
+    error: str | None = None
+
+
 class TestMessage(BaseSchema):
     role: str
     content: str
@@ -378,21 +389,25 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
     app.state.repository = repository or JsonRepository(DATA_DIR)
     app.state.test_state = create_test_state()
 
-    use_mock = parse_bool_env("TEST_USE_MOCK", default=False)
-    app.state.mode = "mock" if use_mock else "yandex"
-    app.state.service_error = None
+    def configure_mode(mode: str) -> None:
+        app.state.mode = mode
+        app.state.service_error = None
 
-    if use_mock:
-        app.state.case_service = MockCaseService()
-    else:
-        api_key = os.getenv("YANDEX_API_KEY", 'AQVN164qFPx2CKKmz9OreO_zs9s9FAn4mZ9qz69D')
-        folder_id = os.getenv("YANDEX_FOLDER_ID", 'b1grlh2bqatdjmcl9tt0')
+        if mode == "mock":
+            app.state.case_service = MockCaseService()
+            return
+
+        api_key = os.getenv("YANDEX_API_KEY", "AQVN164qFPx2CKKmz9OreO_zs9s9FAn4mZ9qz69D")
+        folder_id = os.getenv("YANDEX_FOLDER_ID", "b1grlh2bqatdjmcl9tt0")
 
         if api_key and folder_id:
             app.state.case_service = YandexCaseService(api_key=api_key, folder_id=folder_id)
         else:
             app.state.case_service = None
-            app.state.service_error = "YANDEX_API_KEY and YANDEX_FOLDER_ID are required when TEST_USE_MOCK=false"
+            app.state.service_error = "YANDEX_API_KEY and YANDEX_FOLDER_ID are required when mode=yandex"
+
+    use_mock = parse_bool_env("TEST_USE_MOCK", default=False)
+    configure_mode("mock" if use_mock else "yandex")
 
     def get_repository() -> JsonRepository:
         return app.state.repository
@@ -466,6 +481,16 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
             ready=app.state.case_service is not None,
             error=app.state.service_error,
             cases_count=len(get_repository().list_cases()),
+        )
+
+    @app.post("/test/mode", response_model=TestModeSwitchResponse)
+    def switch_mode(payload: TestModeSwitchRequest) -> TestModeSwitchResponse:
+        configure_mode(payload.mode)
+        return TestModeSwitchResponse(
+            status="ok" if app.state.case_service is not None else "misconfigured",
+            mode=app.state.mode,
+            ready=app.state.case_service is not None,
+            error=app.state.service_error,
         )
 
     @app.get("/test/cases", response_model=list[BusinessCaseSummary])
