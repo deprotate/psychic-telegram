@@ -1,31 +1,47 @@
-Для `\test` фронту теперь нужен совсем простой сценарий: никаких `client_id`, `session_id`, multiple sessions и user progress. Сервер держит одну глобальную активную сессию кейса в памяти, а фронт просто работает с текущим состоянием.
+# Frontend Guide for `/test` API
 
-**Base URL**
-- Локально: `http://localhost:8000`
+Для `/test` фронту нужен максимально простой сценарий:
+
+- нет `client_id`
+- нет `session_id`
+- нет multi-session логики
+- сервер держит одну активную test-сессию кейса в памяти
+- прогресс solved/unsolved тоже живёт только в памяти процесса
+
+## Base URL
+
+- Local: `http://localhost:8000`
 - Swagger: `http://localhost:8000/docs`
 - OpenAPI: `http://localhost:8000/openapi.json`
 
-**Как работает flow**
-1. Фронт загружает список кейсов через `GET /test/cases`
-2. Пользователь выбирает кейс
-3. Фронт вызывает `POST /test/case/start`
-4. Пользователь пишет решение
-5. Фронт вызывает `POST /test/case/submit`
-6. Если пользователь хочет доработать решение, фронт вызывает `POST /test/case/followup`
-7. После refresh фронт может восстановить экран через `GET /test/case/state`
+## Как работает flow
 
-**Важно**
-- В `\test` нет user identity
-- В `\test` нет session id
-- В `\test` в каждый момент времени существует только один активный кейс
-- Новый `POST /test/case/start` полностью сбрасывает предыдущую test-сессию
+1. Фронт запрашивает `GET /test/health`
+2. Фронт запрашивает `GET /test/case/state`
+3. Фронт запрашивает `GET /test/cases`
+4. Пользователь выбирает кейс, фронт вызывает `POST /test/case/start`
+5. Пользователь отправляет решение, фронт вызывает `POST /test/case/submit`
+6. После `submit` кейс автоматически попадает в solved
+7. Если пользователь хочет явно отметить кейс как solved или вернуть его в unsolved, фронт использует progress-endpoint’ы
+8. Если пользователь хочет уточнить решение, фронт вызывает `POST /test/case/followup`
+9. Для экрана прогресса фронт использует `GET /test/cases/progress`
 
-**Endpoints**
+## Важно
 
-`GET /test/health`
+- В `/test` в любой момент времени только один активный кейс
+- Новый `POST /test/case/start` сбрасывает только активную test-сессию
+- Новый `POST /test/case/start` не сбрасывает solved-progress
+- Solved-progress пропадает после рестарта backend
+- `POST /test/case/submit` автоматически добавляет активный кейс в solved
+
+## Endpoints
+
+### `GET /test/health`
+
 Проверка режима работы API.
 
-Пример ответа:
+Пример:
+
 ```json
 {
   "status": "ok",
@@ -37,11 +53,13 @@
 ```
 
 Поля:
+
 - `mode`: `"mock"` или `"yandex"`
-- `ready`: готов ли backend реально обслуживать запросы
+- `ready`: backend готов принимать реальные запросы
 - `status`: `"ok"` или `"misconfigured"`
 
-Если `TEST_USE_MOCK=false`, но нет ключей Яндекса, будет что-то вроде:
+Если `TEST_USE_MOCK=false`, но Yandex неправильно настроен:
+
 ```json
 {
   "status": "misconfigured",
@@ -52,38 +70,42 @@
 }
 ```
 
-`GET /test/cases`
-Список кейсов для карточек/каталога.
+### `GET /test/cases`
+
+Список всех кейсов для каталога.
 
 Пример:
+
 ```json
 [
   {
-    "id": "fintech-onboarding",
-    "title": "Ускорение онбординга в студенческом финтехе",
-    "theme": "fintech",
-    "short_description": "Нужно увеличить конверсию студентов...",
+    "id": "mentor-matching-platform",
+    "title": "Платформа персонального менторства от выпускников",
+    "theme": "careertech",
+    "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
     "difficulty": "medium",
-    "tags": ["финтех", "студенты", "онбординг"]
+    "tags": ["карьера", "менторство", "выпускники"]
   }
 ]
 ```
 
-`GET /test/cases/{case_id}`
-Полное описание кейса.
+### `GET /test/cases/{case_id}`
+
+Полное описание одного кейса.
 
 Пример:
+
 ```json
 {
-  "id": "fintech-onboarding",
-  "title": "Ускорение онбординга в студенческом финтехе",
-  "theme": "fintech",
-  "short_description": "Нужно увеличить конверсию студентов...",
+  "id": "mentor-matching-platform",
+  "title": "Платформа персонального менторства от выпускников",
+  "theme": "careertech",
+  "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
   "difficulty": "medium",
-  "tags": ["финтех", "студенты", "онбординг"],
-  "background": "Студенческий финтех-сервис...",
-  "task": "Предложите MVP-решение...",
-  "reference_solution_summary": "Разбить онбординг на сегменты...",
+  "tags": ["карьера", "менторство", "выпускники"],
+  "background": "У университета огромная база успешных выпускников...",
+  "task": "Предложите MVP продукта...",
+  "reference_solution_summary": "Сделать умный матчмейкинг...",
   "evaluation_criteria": [
     "problem_clarity",
     "market_business_logic",
@@ -93,30 +115,140 @@
 }
 ```
 
-`POST /test/case/start`
-Выбирает активный кейс и сбрасывает прошлую test-сессию.
+### `GET /test/cases/progress`
 
-Request:
+Возвращает solved/unsolved progress.
+
+Пример:
+
 ```json
 {
-  "case_id": "fintech-onboarding"
+  "solved_cases": [
+    {
+      "id": "mentor-matching-platform",
+      "title": "Платформа персонального менторства от выпускников",
+      "theme": "careertech",
+      "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
+      "difficulty": "medium",
+      "tags": ["карьера", "менторство", "выпускники"]
+    }
+  ],
+  "unsolved_cases": [
+    {
+      "id": "abiturient-journey",
+      "title": "ИИ-помощник по выбору образовательной траектории для абитуриентов",
+      "theme": "admission",
+      "short_description": "Сократить количество отказов от поступления...",
+      "difficulty": "hard",
+      "tags": ["абитуриенты", "поступление", "ai"]
+    }
+  ],
+  "solved_count": 1,
+  "unsolved_count": 2
+}
+```
+
+### `POST /test/cases/progress/mark-solved`
+
+Явно помечает кейс как solved.
+
+Request:
+
+```json
+{
+  "case_id": "mentor-matching-platform"
 }
 ```
 
 Response:
+
+```json
+{
+  "status": "ok",
+  "solved_cases": [
+    {
+      "id": "mentor-matching-platform",
+      "title": "Платформа персонального менторства от выпускников",
+      "theme": "careertech",
+      "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
+      "difficulty": "medium",
+      "tags": ["карьера", "менторство", "выпускники"]
+    }
+  ],
+  "unsolved_cases": [],
+  "solved_count": 1,
+  "unsolved_count": 0
+}
+```
+
+### `POST /test/cases/progress/unmark-solved`
+
+Убирает кейс из solved.
+
+Request:
+
+```json
+{
+  "case_id": "mentor-matching-platform"
+}
+```
+
+Response shape такая же, как у `mark-solved`.
+
+### `POST /test/cases/progress/reset`
+
+Полностью очищает solved-progress.
+
+Request body не нужен.
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "solved_cases": [],
+  "unsolved_cases": [
+    {
+      "id": "mentor-matching-platform",
+      "title": "Платформа персонального менторства от выпускников",
+      "theme": "careertech",
+      "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
+      "difficulty": "medium",
+      "tags": ["карьера", "менторство", "выпускники"]
+    }
+  ],
+  "solved_count": 0,
+  "unsolved_count": 1
+}
+```
+
+### `POST /test/case/start`
+
+Выбирает активный кейс и сбрасывает текущую test-сессию.
+
+Request:
+
+```json
+{
+  "case_id": "mentor-matching-platform"
+}
+```
+
+Response:
+
 ```json
 {
   "mode": "mock",
   "case": {
-    "id": "fintech-onboarding",
-    "title": "Ускорение онбординга в студенческом финтехе",
-    "theme": "fintech",
-    "short_description": "Нужно увеличить конверсию студентов...",
+    "id": "mentor-matching-platform",
+    "title": "Платформа персонального менторства от выпускников",
+    "theme": "careertech",
+    "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
     "difficulty": "medium",
-    "tags": ["финтех", "студенты", "онбординг"],
-    "background": "Студенческий финтех-сервис...",
-    "task": "Предложите MVP-решение...",
-    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "tags": ["карьера", "менторство", "выпускники"],
+    "background": "У университета огромная база успешных выпускников...",
+    "task": "Предложите MVP продукта...",
+    "reference_solution_summary": "Сделать умный матчмейкинг...",
     "evaluation_criteria": [
       "problem_clarity",
       "market_business_logic",
@@ -134,30 +266,33 @@ Response:
 }
 ```
 
-`POST /test/case/submit`
-Отправка решения по текущему активному кейсу.
+### `POST /test/case/submit`
+
+Отправляет решение по текущему активному кейсу и автоматически добавляет его в solved.
 
 Request:
+
 ```json
 {
-  "solution_text": "Сначала сегментируем пользователей, сокращаем путь до первой ценности и считаем метрики."
+  "solution_text": "Сначала делаем короткий мэтчинг по целям студента, потом запускаем шаблон первой встречи и считаем NPS."
 }
 ```
 
 Response:
+
 ```json
 {
   "mode": "mock",
   "case": {
-    "id": "fintech-onboarding",
-    "title": "Ускорение онбординга в студенческом финтехе",
-    "theme": "fintech",
-    "short_description": "Нужно увеличить конверсию студентов...",
+    "id": "mentor-matching-platform",
+    "title": "Платформа персонального менторства от выпускников",
+    "theme": "careertech",
+    "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
     "difficulty": "medium",
-    "tags": ["финтех", "студенты", "онбординг"],
-    "background": "Студенческий финтех-сервис...",
-    "task": "Предложите MVP-решение...",
-    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "tags": ["карьера", "менторство", "выпускники"],
+    "background": "У университета огромная база успешных выпускников...",
+    "task": "Предложите MVP продукта...",
+    "reference_solution_summary": "Сделать умный матчмейкинг...",
     "evaluation_criteria": [
       "problem_clarity",
       "market_business_logic",
@@ -185,7 +320,7 @@ Response:
     },
     {
       "role": "user",
-      "content": "Сначала сегментируем пользователей..."
+      "content": "Сначала делаем короткий мэтчинг..."
     },
     {
       "role": "assistant",
@@ -195,30 +330,33 @@ Response:
 }
 ```
 
-`POST /test/case/followup`
-Уточняющий вопрос после submit.
+### `POST /test/case/followup`
+
+Уточняющий вопрос после `submit`.
 
 Request:
+
 ```json
 {
-  "message": "Какой эксперимент лучше сделать первым?"
+  "message": "Какой первый эксперимент лучше сделать?"
 }
 ```
 
 Response:
+
 ```json
 {
   "mode": "mock",
   "case": {
-    "id": "fintech-onboarding",
-    "title": "Ускорение онбординга в студенческом финтехе",
-    "theme": "fintech",
-    "short_description": "Нужно увеличить конверсию студентов...",
+    "id": "mentor-matching-platform",
+    "title": "Платформа персонального менторства от выпускников",
+    "theme": "careertech",
+    "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
     "difficulty": "medium",
-    "tags": ["финтех", "студенты", "онбординг"],
-    "background": "Студенческий финтех-сервис...",
-    "task": "Предложите MVP-решение...",
-    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "tags": ["карьера", "менторство", "выпускники"],
+    "background": "У университета огромная база успешных выпускников...",
+    "task": "Предложите MVP продукта...",
+    "reference_solution_summary": "Сделать умный матчмейкинг...",
     "evaluation_criteria": [
       "problem_clarity",
       "market_business_logic",
@@ -237,7 +375,7 @@ Response:
     },
     {
       "role": "user",
-      "content": "Сначала сегментируем пользователей..."
+      "content": "Сначала делаем короткий мэтчинг..."
     },
     {
       "role": "assistant",
@@ -245,7 +383,7 @@ Response:
     },
     {
       "role": "user",
-      "content": "Какой эксперимент лучше сделать первым?"
+      "content": "Какой первый эксперимент лучше сделать?"
     },
     {
       "role": "assistant",
@@ -255,10 +393,12 @@ Response:
 }
 ```
 
-`GET /test/case/state`
-Получение текущего состояния test-сессии. Это главный endpoint для восстановления UI после refresh.
+### `GET /test/case/state`
+
+Возвращает текущее состояние активной test-сессии.
 
 Если кейс ещё не стартовал:
+
 ```json
 {
   "mode": "mock",
@@ -269,19 +409,20 @@ Response:
 ```
 
 Если кейс уже активен:
+
 ```json
 {
   "mode": "mock",
   "active_case": {
-    "id": "fintech-onboarding",
-    "title": "Ускорение онбординга в студенческом финтехе",
-    "theme": "fintech",
-    "short_description": "Нужно увеличить конверсию студентов...",
+    "id": "mentor-matching-platform",
+    "title": "Платформа персонального менторства от выпускников",
+    "theme": "careertech",
+    "short_description": "Нужно помочь студентам быстро находить выпускников-менторов...",
     "difficulty": "medium",
-    "tags": ["финтех", "студенты", "онбординг"],
-    "background": "Студенческий финтех-сервис...",
-    "task": "Предложите MVP-решение...",
-    "reference_solution_summary": "Разбить онбординг на сегменты...",
+    "tags": ["карьера", "менторство", "выпускники"],
+    "background": "У университета огромная база успешных выпускников...",
+    "task": "Предложите MVP продукта...",
+    "reference_solution_summary": "Сделать умный матчмейкинг...",
     "evaluation_criteria": [
       "problem_clarity",
       "market_business_logic",
@@ -299,16 +440,22 @@ Response:
 }
 ```
 
-**Ошибки**
+## Ошибки
+
 - `404` если кейс не найден
 - `400` если вызвать `submit` без `start`
 - `400` если вызвать `followup` до `submit`
+- `404` если `mark-solved` или `unmark-solved` получили несуществующий `case_id`
 - `503` если выбран Yandex-режим, но backend misconfigured
-- `502` если Yandex API реально упал во время запроса
+- `502` если Yandex API упал во время запроса
 
-**Что хранить на фронте**
+## Что хранить на фронте
+
 Минимум:
+
 - `cases`
+- `solvedCases`
+- `unsolvedCases`
 - `activeCase`
 - `messages`
 - `lastEvaluation`
@@ -316,8 +463,25 @@ Response:
 - `loading`
 - `error`
 
-Пример state:
+Пример типов:
+
 ```ts
+type CaseSummary = {
+  id: string;
+  title: string;
+  theme: string;
+  short_description: string;
+  difficulty: string;
+  tags: string[];
+};
+
+type CaseDetail = CaseSummary & {
+  background: string;
+  task: string;
+  reference_solution_summary: string;
+  evaluation_criteria: string[];
+};
+
 type TestMessage = {
   role: "user" | "assistant";
   content: string;
@@ -340,30 +504,48 @@ type TestEvaluation = {
   messages: TestMessage[];
 };
 
+type TestProgress = {
+  solved_cases: CaseSummary[];
+  unsolved_cases: CaseSummary[];
+  solved_count: number;
+  unsolved_count: number;
+};
+
 type TestState = {
   mode: "mock" | "yandex" | null;
   activeCase: CaseDetail | null;
   messages: TestMessage[];
   lastEvaluation: TestEvaluation | null;
+  progress: TestProgress | null;
 };
 ```
 
-**Рекомендуемый frontend flow**
+## Рекомендуемый frontend flow
+
 - На загрузке страницы:
   - `GET /test/health`
   - `GET /test/case/state`
-  - если кейс не активен, показать список из `GET /test/cases`
+  - `GET /test/cases/progress`
+  - `GET /test/cases`
 - При выборе кейса:
   - `POST /test/case/start`
-  - взять `case`, `welcome_message`, `messages`
+  - обновить `activeCase`, `messages`, `lastEvaluation = null`
 - При отправке решения:
   - `POST /test/case/submit`
   - обновить `messages` и `lastEvaluation`
+  - затем обновить `GET /test/cases/progress`, если экран прогресса уже показан отдельно
 - При follow-up:
   - `POST /test/case/followup`
   - обновить `messages`
+- При ручной отметке solved:
+  - `POST /test/cases/progress/mark-solved`
+- При снятии solved:
+  - `POST /test/cases/progress/unmark-solved`
+- При полном сбросе:
+  - `POST /test/cases/progress/reset`
 
-**Готовый fetch helper**
+## Ready-to-use fetch helper
+
 ```ts
 const API_BASE = "http://localhost:8000";
 
@@ -385,23 +567,33 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 ```
 
-**Примеры вызовов**
-Загрузка кейсов:
+## Примеры вызовов
+
+Получить кейсы:
+
 ```ts
-const cases = await api("/test/cases");
+const cases = await api<CaseSummary[]>("/test/cases");
+```
+
+Получить progress:
+
+```ts
+const progress = await api<TestProgress>("/test/cases/progress");
 ```
 
 Старт кейса:
+
 ```ts
 const started = await api("/test/case/start", {
   method: "POST",
   body: JSON.stringify({
-    case_id: "fintech-onboarding"
+    case_id: "mentor-matching-platform"
   })
 });
 ```
 
-Отправка решения:
+Отправить решение:
+
 ```ts
 const evaluation = await api("/test/case/submit", {
   method: "POST",
@@ -412,6 +604,7 @@ const evaluation = await api("/test/case/submit", {
 ```
 
 Follow-up:
+
 ```ts
 const followup = await api("/test/case/followup", {
   method: "POST",
@@ -421,9 +614,38 @@ const followup = await api("/test/case/followup", {
 });
 ```
 
-Восстановление state:
+Явно пометить solved:
+
+```ts
+const progress = await api("/test/cases/progress/mark-solved", {
+  method: "POST",
+  body: JSON.stringify({
+    case_id: "mentor-matching-platform"
+  })
+});
+```
+
+Снять solved:
+
+```ts
+const progress = await api("/test/cases/progress/unmark-solved", {
+  method: "POST",
+  body: JSON.stringify({
+    case_id: "mentor-matching-platform"
+  })
+});
+```
+
+Сбросить progress:
+
+```ts
+const progress = await api("/test/cases/progress/reset", {
+  method: "POST"
+});
+```
+
+Восстановить активную сессию:
+
 ```ts
 const state = await api("/test/case/state");
 ```
-
-Если хочешь, следующим сообщением могу сразу написать готовый `testApi.ts` и пример React-хука `useTestCaseFlow()` под этот `/test` контракт.

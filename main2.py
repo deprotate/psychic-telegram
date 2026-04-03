@@ -59,6 +59,10 @@ class TestCaseFollowupRequest(BaseSchema):
     message: str = Field(min_length=1)
 
 
+class TestCaseProgressMarkRequest(BaseSchema):
+    case_id: str = Field(min_length=1)
+
+
 class TestCaseEvaluationResponse(BaseSchema):
     mode: str
     case: BusinessCaseDetail
@@ -94,6 +98,17 @@ class TestCaseStateResponse(BaseSchema):
     active_case: BusinessCaseDetail | None = None
     messages: list[TestMessage] = Field(default_factory=list)
     last_evaluation: TestCaseEvaluationResponse | None = None
+
+
+class TestCasesProgressResponse(BaseSchema):
+    solved_cases: list[BusinessCaseSummary] = Field(default_factory=list)
+    unsolved_cases: list[BusinessCaseSummary] = Field(default_factory=list)
+    solved_count: int
+    unsolved_count: int
+
+
+class TestCasesProgressMutationResponse(TestCasesProgressResponse):
+    status: str
 
 
 class MockCaseService:
@@ -340,6 +355,7 @@ def create_test_state() -> dict[str, Any]:
         "messages": [],
         "last_solution": None,
         "last_evaluation": None,
+        "solved_case_ids": set(),
     }
 
 
@@ -405,6 +421,18 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
     def serialize_messages() -> list[TestMessage]:
         return [TestMessage(role=item["role"], content=item["content"]) for item in app.state.test_state.get("messages", [])]
 
+    def build_progress_payload() -> dict[str, Any]:
+        all_cases = get_repository().list_cases()
+        solved_ids = set(app.state.test_state.get("solved_case_ids", set()))
+        solved_cases = [BusinessCaseSummary.model_validate(item) for item in all_cases if item["id"] in solved_ids]
+        unsolved_cases = [BusinessCaseSummary.model_validate(item) for item in all_cases if item["id"] not in solved_ids]
+        return {
+            "solved_cases": solved_cases,
+            "unsolved_cases": unsolved_cases,
+            "solved_count": len(solved_cases),
+            "unsolved_count": len(unsolved_cases),
+        }
+
     def build_state_response() -> TestCaseStateResponse:
         active_case_id = app.state.test_state.get("active_case_id")
         active_case = BusinessCaseDetail.model_validate(get_case_or_404(active_case_id)) if active_case_id else None
@@ -444,6 +472,27 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
     def list_cases() -> list[BusinessCaseSummary]:
         return [BusinessCaseSummary.model_validate(item) for item in get_repository().list_cases()]
 
+    @app.get("/test/cases/progress", response_model=TestCasesProgressResponse)
+    def get_cases_progress() -> TestCasesProgressResponse:
+        return TestCasesProgressResponse(**build_progress_payload())
+
+    @app.post("/test/cases/progress/mark-solved", response_model=TestCasesProgressMutationResponse)
+    def mark_case_solved(payload: TestCaseProgressMarkRequest) -> TestCasesProgressMutationResponse:
+        get_case_or_404(payload.case_id)
+        app.state.test_state["solved_case_ids"].add(payload.case_id)
+        return TestCasesProgressMutationResponse(status="ok", **build_progress_payload())
+
+    @app.post("/test/cases/progress/unmark-solved", response_model=TestCasesProgressMutationResponse)
+    def unmark_case_solved(payload: TestCaseProgressMarkRequest) -> TestCasesProgressMutationResponse:
+        get_case_or_404(payload.case_id)
+        app.state.test_state["solved_case_ids"].discard(payload.case_id)
+        return TestCasesProgressMutationResponse(status="ok", **build_progress_payload())
+
+    @app.post("/test/cases/progress/reset", response_model=TestCasesProgressMutationResponse)
+    def reset_cases_progress() -> TestCasesProgressMutationResponse:
+        app.state.test_state["solved_case_ids"] = set()
+        return TestCasesProgressMutationResponse(status="ok", **build_progress_payload())
+
     @app.get("/test/cases/{case_id}", response_model=BusinessCaseDetail)
     def get_case(case_id: str) -> BusinessCaseDetail:
         return BusinessCaseDetail.model_validate(get_case_or_404(case_id))
@@ -456,7 +505,9 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
     def start_case(payload: TestCaseStartRequest) -> TestCaseStartResponse:
         case_data = get_case_or_404(payload.case_id)
         get_service()
+        solved_case_ids = set(app.state.test_state.get("solved_case_ids", set()))
         app.state.test_state = create_test_state()
+        app.state.test_state["solved_case_ids"] = solved_case_ids
         app.state.test_state["active_case_id"] = payload.case_id
         welcome_message = (
             f"Кейс «{case_data['title']}» активирован. "
@@ -482,6 +533,7 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
 
         app.state.test_state["last_solution"] = payload.solution_text
         app.state.test_state["last_evaluation"] = evaluation
+        app.state.test_state["solved_case_ids"].add(case_data["id"])
         app.state.test_state["messages"].append({"role": "user", "content": payload.solution_text})
         app.state.test_state["messages"].append({"role": "assistant", "content": evaluation["summary"]})
 
