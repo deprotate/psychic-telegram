@@ -369,8 +369,9 @@ def create_main2_app(repository: JsonRepository | None = None) -> FastAPI:
     if use_mock:
         app.state.case_service = MockCaseService()
     else:
-        api_key = os.getenv("YANDEX_API_KEY")
-        folder_id = os.getenv("YANDEX_FOLDER_ID")
+        api_key = os.getenv("YANDEX_API_KEY", 'AQVN164qFPx2CKKmz9OreO_zs9s9FAn4mZ9qz69D')
+        folder_id = os.getenv("YANDEX_FOLDER_ID", 'b1grlh2bqatdjmcl9tt0')
+
         if api_key and folder_id:
             app.state.case_service = YandexCaseService(api_key=api_key, folder_id=folder_id)
         else:
