@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8000 \
-    APP_MODULE=main2:app
+    APP_DATA_DIR=/app/data \
+    APP_MODULE=main3:app
 
 WORKDIR /app
 

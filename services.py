@@ -25,10 +25,11 @@ class JsonRepository:
     def __init__(self, data_dir: str | Path) -> None:
         self.data_dir = Path(data_dir)
         self.state_dir = self.data_dir / "state"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_state_file("sessions.json", [])
         self._ensure_state_file("progress.json", {"completions": []})
+        self._ensure_state_file("test_case_states.json", {})
 
     def _ensure_state_file(self, filename: str, default: Any) -> None:
         path = self.state_dir / filename
@@ -60,47 +61,67 @@ class JsonRepository:
         return self._read_json(self.state_dir / "sessions.json", [])
 
     def create_session(self, session: dict[str, Any]) -> dict[str, Any]:
-        sessions = self.list_sessions()
-        sessions.append(session)
-        self._write_json(self.state_dir / "sessions.json", sessions)
+        path = self.state_dir / "sessions.json"
+        with self._lock:
+            sessions = self._read_json(path, [])
+            sessions.append(session)
+            self._write_json(path, sessions)
         return session
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         return next((item for item in self.list_sessions() if item["id"] == session_id), None)
 
     def save_session(self, session: dict[str, Any]) -> dict[str, Any]:
-        sessions = self.list_sessions()
-        updated = False
-        for index, existing in enumerate(sessions):
-            if existing["id"] == session["id"]:
-                sessions[index] = session
-                updated = True
-                break
-        if not updated:
-            sessions.append(session)
-        self._write_json(self.state_dir / "sessions.json", sessions)
+        path = self.state_dir / "sessions.json"
+        with self._lock:
+            sessions = self._read_json(path, [])
+            updated = False
+            for index, existing in enumerate(sessions):
+                if existing["id"] == session["id"]:
+                    sessions[index] = session
+                    updated = True
+                    break
+            if not updated:
+                sessions.append(session)
+            self._write_json(path, sessions)
         return session
 
     def record_completion(self, completion: dict[str, Any]) -> dict[str, Any]:
         path = self.state_dir / "progress.json"
-        progress = self._read_json(path, {"completions": []})
-        completions = progress.get("completions", [])
-        replaced = False
-        for index, existing in enumerate(completions):
-            same_task = (
-                existing.get("client_id") == completion["client_id"]
-                and existing.get("task_type") == completion["task_type"]
-                and existing.get("task_id") == completion["task_id"]
-            )
-            if same_task:
-                completions[index] = completion
-                replaced = True
-                break
-        if not replaced:
-            completions.append(completion)
-        progress["completions"] = completions
-        self._write_json(path, progress)
+        with self._lock:
+            progress = self._read_json(path, {"completions": []})
+            completions = progress.get("completions", [])
+            replaced = False
+            for index, existing in enumerate(completions):
+                same_task = (
+                    existing.get("client_id") == completion["client_id"]
+                    and existing.get("task_type") == completion["task_type"]
+                    and existing.get("task_id") == completion["task_id"]
+                )
+                if same_task:
+                    completions[index] = completion
+                    replaced = True
+                    break
+            if not replaced:
+                completions.append(completion)
+            progress["completions"] = completions
+            self._write_json(path, progress)
         return completion
+
+    def get_test_case_state(self, client_id: str) -> dict[str, Any]:
+        states = self._read_json(self.state_dir / "test_case_states.json", {})
+        state = states.get(client_id)
+        if not isinstance(state, dict):
+            return {}
+        return state
+
+    def save_test_case_state(self, client_id: str, state: dict[str, Any]) -> dict[str, Any]:
+        path = self.state_dir / "test_case_states.json"
+        with self._lock:
+            states = self._read_json(path, {})
+            states[client_id] = state
+            self._write_json(path, states)
+        return state
 
     def get_stats(self, client_id: str) -> dict[str, Any]:
         sessions = [item for item in self.list_sessions() if item.get("client_id") == client_id]
